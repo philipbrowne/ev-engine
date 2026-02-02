@@ -3,3 +3,12 @@ __pycache__/
 *.pyc
 .venv/
 venv/
+
+# Testing artifacts
+htmlcov/
+.coverage
+.pytest_cache/
+.mypy_cache/
+
+# Streamlit secrets
+.streamlit/secrets.toml

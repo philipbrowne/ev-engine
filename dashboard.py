@@ -2,11 +2,38 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime
 from src import db, odds_api
-from src.config import SPORTS_MAP
+from src.config import SPORTS_MAP, logger
+from src.type_safety import safe_currency_to_float, safe_get_column, validate_stake
+from auth import check_password, add_logout_button
+
+# 🔐 AUTHENTICATION: Check password before showing dashboard
+if not check_password():
+    st.stop()  # Stop execution if not authenticated
 
 
 def style_row_by_ev(row):
-    """Return background and text color for entire row based on EV %."""
+    """Return background and text color for entire row based on EV percentage.
+
+    Applies color coding to dashboard rows for visual identification of
+    high-value betting opportunities.
+
+    Args:
+        row: DataFrame row with '_EV_Numeric' column
+
+    Returns:
+        List of CSS style strings, one per column in the row
+
+    Color Scheme:
+        - Gold (#FFD700): EV >= 5.0% (premium opportunities)
+        - Light green (#90EE90): 0% < EV < 5% (positive EV)
+        - Light red (#FFCCCB): EV <= 0% (negative EV, avoid)
+
+    Examples:
+        >>> row = pd.Series({'_EV_Numeric': 6.5, 'Player': 'LeBron'})
+        >>> styles = style_row_by_ev(row)
+        >>> print(styles[0])  # Gold background
+        'background-color: #FFD700; color: black'
+    """
     ev = row.get("_EV_Numeric", 0)
     if ev >= 5.0:
         return ["background-color: #FFD700; color: black"] * len(row)
@@ -17,7 +44,30 @@ def style_row_by_ev(row):
 
 
 def get_recommendation(ev):
-    """Return recommendation based on EV %."""
+    """Return betting recommendation based on EV percentage.
+
+    Categorizes betting opportunities into three action levels for quick
+    decision-making in the dashboard.
+
+    Args:
+        ev: Expected value percentage (e.g., 5.2 for +5.2% EV)
+
+    Returns:
+        String recommendation: 'SMASH', 'FLEX', or 'AVOID'
+
+    Recommendation Logic:
+        - 'SMASH': EV > 5.0% - High-value opportunity, strong bet
+        - 'FLEX': 0% < EV <= 5.0% - Positive EV, suitable for flex picks
+        - 'AVOID': EV <= 0% - Negative EV, do not bet
+
+    Examples:
+        >>> get_recommendation(7.5)
+        'SMASH'
+        >>> get_recommendation(2.3)
+        'FLEX'
+        >>> get_recommendation(-1.5)
+        'AVOID'
+    """
     if ev > 5.0:
         return "SMASH"
     elif ev > 0.0:
@@ -27,7 +77,34 @@ def get_recommendation(ev):
 
 
 def get_risk_level(win_prob):
-    """Return risk level based on fair win probability."""
+    """Return risk level categorization based on fair win probability.
+
+    Classifies bets by their win probability to help users balance their
+    pick selections and understand variance.
+
+    Args:
+        win_prob: Fair win probability as decimal (0 to 1, e.g., 0.58 for 58%)
+
+    Returns:
+        String risk level: 'Low Risk', 'Medium Risk', 'High Risk', or 'Unknown'
+
+    Risk Thresholds:
+        - Low Risk: win_prob > 58% (>58% chance to hit)
+        - Medium Risk: 55% <= win_prob <= 58%
+        - High Risk: win_prob < 55% (coin flip or worse)
+        - Unknown: If win_prob is NaN/missing
+
+    Examples:
+        >>> get_risk_level(0.60)  # 60% win probability
+        'Low Risk'
+        >>> get_risk_level(0.56)  # 56% win probability
+        'Medium Risk'
+        >>> get_risk_level(0.52)  # 52% win probability
+        'High Risk'
+        >>> import pandas as pd
+        >>> get_risk_level(pd.NA)
+        'Unknown'
+    """
     if pd.isna(win_prob):
         return "Unknown"
     prob_pct = win_prob * 100
@@ -40,7 +117,32 @@ def get_risk_level(win_prob):
 
 
 def get_freshness(timestamp_str):
-    """Calculate time difference from now to timestamp."""
+    """Calculate time difference from now to timestamp for freshness display.
+
+    Converts timestamps into human-readable age indicators to show how
+    recent the odds data is.
+
+    Args:
+        timestamp_str: ISO format timestamp string or datetime object
+
+    Returns:
+        String describing age: '5s ago', '12m ago', '2h ago', '3d ago', or 'Unknown'
+
+    Time Formatting:
+        - Seconds: < 60s
+        - Minutes: < 60m
+        - Hours: < 24h
+        - Days: >= 24h
+
+    Examples:
+        >>> get_freshness('2024-01-15T12:00:00')  # If now is 12:05:00
+        '5m ago'
+        >>> get_freshness('N/A')
+        'Unknown'
+        >>> from datetime import datetime
+        >>> get_freshness(datetime.now())
+        '0s ago'
+    """
     if pd.isna(timestamp_str) or timestamp_str == "N/A":
         return "Unknown"
     try:
@@ -67,11 +169,42 @@ def get_freshness(timestamp_str):
         else:
             days = total_seconds // 86400
             return f"{days}d ago"
-    except Exception:
+    except Exception as e:
+        logger.warning(f"Failed to parse timestamp: {e}")
         return "Unknown"
 
 
 def main():
+    """Main entry point for the Antigravity EV Engine Streamlit dashboard.
+
+    Renders a comprehensive sports betting analytics dashboard with three main tabs:
+    1. Live Board - Real-time betting opportunities with EV calculations
+    2. Track Bets - Slip creation and bet tracking interface
+    3. Analytics - Performance metrics and ROI analysis
+
+    Features:
+        - Multi-sport odds scanning with API quota management
+        - Real-time EV calculations using Pinnacle sharp odds
+        - Visual color coding for opportunity quality
+        - Historical hit rate tracking per player/market
+        - Slip-based bet tracking with automatic P/L calculations
+        - Performance analytics with bankroll progression
+        - Risk level categorization for pick selection
+
+    Database Operations:
+        Initializes all required tables on startup and maintains connection
+        pool throughout session.
+
+    Streamlit Configuration:
+        - Wide layout for maximum data visibility
+        - Custom page title and metrics dashboard
+        - Multi-select filters for books, sports, and risk levels
+        - Interactive forms for bet tracking
+
+    Examples:
+        Run from command line:
+        >>> streamlit run dashboard.py
+    """
     # Master Key: Ensure all database tables exist before any operations
     db.initialize_db()
 
@@ -103,6 +236,9 @@ def main():
         default=[s for s in default_sports if s in available_sports],
         help="Select which sports to fetch when refreshing. NCAAB excluded by default to save API calls."
     )
+
+    # Add logout button at bottom of sidebar
+    add_logout_button()
 
     # Tabs for different sections
     tab_live, tab_track, tab_analytics = st.tabs(["Live Board", "Track Bets", "Analytics"])
@@ -146,7 +282,16 @@ def main():
             if "_EV_Numeric" in df.columns:
                 df["Recommendation"] = df["_EV_Numeric"].apply(get_recommendation)
 
-            df["Hit Rate"] = df.apply(lambda x: [1, 0, 1, 1, 0, 1, 0, 1], axis=1)
+            # Calculate actual historical hit rates from database
+            def get_hit_rate_for_row(row):
+                """Get historical hit rate for a specific player/market combination."""
+                player = row.get("Player", "")
+                market = row.get("Market", "")
+                if player and market:
+                    return db.get_historical_hit_rate(player, market, limit=8)
+                return []
+
+            df["Hit Rate"] = df.apply(get_hit_rate_for_row, axis=1)
 
             # Sidebar Filters
             st.sidebar.header("Filters")
@@ -322,33 +467,39 @@ def main():
             if submitted:
                 if len(selected_picks) != num_legs:
                     st.error(f"Please select exactly {num_legs} picks. You selected {len(selected_picks)}.")
-                elif stake <= 0:
-                    st.error("Stake must be greater than 0")
                 else:
-                    # Build legs from selected picks using filtered_df
-                    legs = []
-                    for pick_label in selected_picks:
-                        # Find the matching row in filtered_df (which has _select_label)
-                        if not filtered_df.empty and "_select_label" in filtered_df.columns:
-                            match = filtered_df[filtered_df["_select_label"] == pick_label]
-                            if not match.empty:
-                                row = match.iloc[0]
-                                legs.append({
-                                    "player": row.get("Player", "Unknown"),
-                                    "market": row.get("Market", "Unknown"),
-                                    "line": row.get("Line", 0.0),
-                                })
+                    # Validate stake with type-safe validation
+                    try:
+                        validated_stake = validate_stake(stake)
+                    except ValueError as e:
+                        st.error(str(e))
+                        validated_stake = None
 
-                    if legs:
-                        slip_id = db.create_slip(
-                            book=book,
-                            stake=stake,
-                            legs=legs,
-                            note=note if note else None,
-                        )
-                        st.session_state.selected_legs = []  # Clear after successful submit
-                        st.success(f"Slip #{slip_id} created with {len(legs)} legs!")
-                        st.rerun()
+                    if validated_stake:
+                        # Build legs from selected picks using filtered_df
+                        legs = []
+                        for pick_label in selected_picks:
+                            # Find the matching row in filtered_df (which has _select_label)
+                            if not filtered_df.empty and "_select_label" in filtered_df.columns:
+                                match = filtered_df[filtered_df["_select_label"] == pick_label]
+                                if not match.empty:
+                                    row = match.iloc[0]
+                                    legs.append({
+                                        "player": row.get("Player", "Unknown"),
+                                        "market": row.get("Market", "Unknown"),
+                                        "line": row.get("Line", 0.0),
+                                    })
+
+                        if legs:
+                            slip_id = db.create_slip(
+                                book=book,
+                                stake=validated_stake,
+                                legs=legs,
+                                note=note if note else None,
+                            )
+                            st.session_state.selected_legs = []  # Clear after successful submit
+                            st.success(f"Slip #{slip_id} created with {len(legs)} legs!")
+                            st.rerun()
 
         st.markdown("---")
 
@@ -366,7 +517,8 @@ def main():
             else:
                 for _, row in pending_slips.iterrows():
                     slip_id = row["ID"]
-                    stake_val = float(row["Stake"].replace("$", ""))
+                    # Use type-safe currency conversion
+                    stake_val = safe_currency_to_float(row["Stake"])
                     multiplier = {2: 3.0, 3: 5.0, 4: 6.0, 5: 10.0}.get(row["Legs"], 3.0)
                     potential = stake_val * multiplier
 

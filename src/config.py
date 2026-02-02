@@ -1,7 +1,19 @@
 import os
+import logging
 from dotenv import load_dotenv
 
 load_dotenv()
+
+# Logging Configuration
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('ev_engine.log'),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger('ev_engine')
 
 # The Odds API Configuration
 ODDS_API_KEY = os.getenv("ODDS_API_KEY", "")

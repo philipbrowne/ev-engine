@@ -1,6 +1,7 @@
 """Database connection and query management for EV Engine."""
 
 import sqlite3
+import os
 from datetime import datetime
 from typing import Optional
 
@@ -16,6 +17,8 @@ def get_connection() -> sqlite3.Connection:
     Establishes a connection to the SQLite database and configures it to return
     rows as dictionaries (using sqlite3.Row) for convenient column access by name.
 
+    Creates the data directory if it doesn't exist (needed for Streamlit Cloud).
+
     Returns:
         SQLite connection object with row_factory configured
 
@@ -26,6 +29,11 @@ def get_connection() -> sqlite3.Connection:
         >>> row = cursor.fetchone()
         >>> print(row["player_name"])  # Access by column name
     """
+    # Create data directory if it doesn't exist (for Streamlit Cloud)
+    db_dir = os.path.dirname(DATABASE_PATH)
+    if db_dir and not os.path.exists(db_dir):
+        os.makedirs(db_dir, exist_ok=True)
+
     conn = sqlite3.connect(DATABASE_PATH)
     conn.row_factory = sqlite3.Row
     return conn

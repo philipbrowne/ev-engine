@@ -5,13 +5,19 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Logging Configuration
+# On Streamlit Cloud, file logging may not be available, so we'll use StreamHandler only if FileHandler fails
+handlers = []
+try:
+    handlers.append(logging.FileHandler('ev_engine.log'))
+except (OSError, PermissionError):
+    # File logging not available (e.g., Streamlit Cloud), use console only
+    pass
+handlers.append(logging.StreamHandler())
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('ev_engine.log'),
-        logging.StreamHandler()
-    ]
+    handlers=handlers
 )
 logger = logging.getLogger('ev_engine')
 

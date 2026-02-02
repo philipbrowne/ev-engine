@@ -11,8 +11,10 @@ from .config import (
     SUPPORTED_SPORTS,
     SPORTS_MAP,
     SHARP_BOOKMAKER,
+    FALLBACK_SHARP_BOOKMAKER,
     DFS_BOOKMAKERS,
     DFS_BOOK_NAMES,
+    SHARP_CONFIDENCE,
     logger,
 )
 from .db import insert_odds_batch
@@ -299,7 +301,7 @@ def fetch_and_store_player_props(
         >>> print(f"Stored {count} odds records")
     """
     if bookmakers is None:
-        bookmakers = [SHARP_BOOKMAKER] + DFS_BOOKMAKERS
+        bookmakers = [SHARP_BOOKMAKER, FALLBACK_SHARP_BOOKMAKER] + DFS_BOOKMAKERS
 
     # Get all upcoming events for the sport
     events = get_events(sport_key)
@@ -600,7 +602,7 @@ def fetch_odds(sports_to_fetch: Optional[list[str]] = None) -> int:
 
     total_odds_count = 0
     timestamp = datetime.now()
-    bookmakers = [SHARP_BOOKMAKER] + DFS_BOOKMAKERS
+    bookmakers = [SHARP_BOOKMAKER, FALLBACK_SHARP_BOOKMAKER] + DFS_BOOKMAKERS
     bookmakers_str = ",".join(bookmakers)
 
     # Markets to fetch for player props
@@ -780,16 +782,17 @@ def _find_and_save_ev_opportunities(records: list[dict], db) -> int:
     """Find and save Pick-Em opportunities by comparing sharp odds to DFS lines.
 
     Internal function that analyzes fetched odds to identify positive EV plays.
-    Compares Pinnacle (sharp) fair probabilities against DFS book availability
-    at the same line values.
+    Compares sharp bookmaker (Pinnacle preferred, FanDuel fallback) fair probabilities
+    against DFS book availability at the same line values.
 
     Process:
         1. Group records by (player, market, point) to ensure line matching
-        2. For each group, check if Pinnacle odds exist
+        2. For each group, check if Pinnacle odds exist; if not, use FanDuel as fallback
         3. Calculate fair probabilities using devig_pinnacle_odds()
-        4. Calculate EV percentage vs IMPLIED_BREAKEVEN_PROB (54.25% for 5-pick 10x)
-        5. Save opportunities where DFS books have matching lines
-        6. Log top 3 highest EV plays found
+        4. Apply confidence discount based on sharp source (FanDuel EVs discounted 25%)
+        5. Calculate EV percentage vs IMPLIED_BREAKEVEN_PROB (54.25% for 5-pick 10x)
+        6. Save opportunities where DFS books have matching lines
+        7. Log top 3 highest EV plays found
 
     Args:
         records: List of parsed odds records from API
@@ -799,7 +802,8 @@ def _find_and_save_ev_opportunities(records: list[dict], db) -> int:
         Number of Pick-Em opportunities saved to database
 
     Algorithm:
-        - Uses multiplicative vig removal on Pinnacle odds
+        - Uses multiplicative vig removal on sharp odds
+        - Applies confidence discount for non-Pinnacle sources (FanDuel: 0.75x EV)
         - Compares fair probability to 54.25% breakeven threshold
         - Saves ALL opportunities (not just +EV) for user filtering
         - Logs top 3 EV plays regardless of threshold
@@ -835,39 +839,55 @@ def _find_and_save_ev_opportunities(records: list[dict], db) -> int:
 
     ev_count = 0
     all_evs = []  # Track all EVs to show top 3
+    sharp_source_counts = {"pinnacle": 0, "fanduel": 0}
 
     for (player_name, market_key, point), books in grouped.items():
-        # Need Pinnacle odds as the sharp reference
-        if SHARP_BOOKMAKER not in books:
+        # Determine which sharp bookmaker to use (Pinnacle preferred, FanDuel fallback)
+        sharp_source = None
+        if SHARP_BOOKMAKER in books:
+            sharp_source = SHARP_BOOKMAKER
+        elif FALLBACK_SHARP_BOOKMAKER in books:
+            sharp_source = FALLBACK_SHARP_BOOKMAKER
+        else:
+            # No sharp reference available, skip this player/market
             continue
 
-        pinnacle = books[SHARP_BOOKMAKER]
-        pinnacle_over_raw = pinnacle.get("Over")
-        pinnacle_under_raw = pinnacle.get("Under")
+        sharp_odds = books[sharp_source]
+        sharp_over_raw = sharp_odds.get("Over")
+        sharp_under_raw = sharp_odds.get("Under")
 
-        if pinnacle_over_raw is None or pinnacle_under_raw is None:
+        if sharp_over_raw is None or sharp_under_raw is None:
             continue
 
-        # Type-safe conversion and validation of Pinnacle odds
+        # Type-safe conversion and validation of sharp odds
         try:
-            pinnacle_over = safe_int(pinnacle_over_raw)
-            pinnacle_under = safe_int(pinnacle_under_raw)
-            validate_american_odds(pinnacle_over, name="pinnacle_over")
-            validate_american_odds(pinnacle_under, name="pinnacle_under")
+            sharp_over = safe_int(sharp_over_raw)
+            sharp_under = safe_int(sharp_under_raw)
+            validate_american_odds(sharp_over, name=f"{sharp_source}_over")
+            validate_american_odds(sharp_under, name=f"{sharp_source}_under")
         except ValueError as e:
             logger.warning(
-                f"Invalid Pinnacle odds for {player_name} {market_key}: {e}"
+                f"Invalid {sharp_source} odds for {player_name} {market_key}: {e}"
             )
             continue
 
-        # Calculate fair probability from Pinnacle odds (removing vig)
-        fair_over_prob, fair_under_prob = devig_pinnacle_odds(pinnacle_over, pinnacle_under)
+        # Get confidence factor for this sharp source
+        confidence = SHARP_CONFIDENCE.get(sharp_source, 0.75)
+
+        # Calculate fair probability from sharp odds (removing vig)
+        fair_over_prob, fair_under_prob = devig_pinnacle_odds(sharp_over, sharp_under)
+
+        # Calculate raw EV percentages
+        raw_over_ev = calculate_ev_percentage(fair_over_prob, IMPLIED_BREAKEVEN_PROB)
+        raw_under_ev = calculate_ev_percentage(fair_under_prob, IMPLIED_BREAKEVEN_PROB)
+
+        # Apply confidence discount to EV (only discount positive EV, don't make negative EV worse)
+        over_ev_pct = raw_over_ev * confidence if raw_over_ev > 0 else raw_over_ev
+        under_ev_pct = raw_under_ev * confidence if raw_under_ev > 0 else raw_under_ev
 
         # Track all EVs (even those below threshold) for top 3 display
-        over_ev_pct = calculate_ev_percentage(fair_over_prob, IMPLIED_BREAKEVEN_PROB)
-        under_ev_pct = calculate_ev_percentage(fair_under_prob, IMPLIED_BREAKEVEN_PROB)
-        all_evs.append((player_name, market_key, point, "Over", fair_over_prob, over_ev_pct))
-        all_evs.append((player_name, market_key, point, "Under", fair_under_prob, under_ev_pct))
+        all_evs.append((player_name, market_key, point, "Over", fair_over_prob, over_ev_pct, sharp_source))
+        all_evs.append((player_name, market_key, point, "Under", fair_under_prob, under_ev_pct, sharp_source))
 
         # Check DFS books for Pick-Em opportunities (must have same line)
         for dfs_book in DFS_BOOKMAKERS:
@@ -879,44 +899,47 @@ def _find_and_save_ev_opportunities(records: list[dict], db) -> int:
 
             # Check Over - save if DFS book has this line
             if "Over" in dfs_odds:
-                ev_pct = calculate_ev_percentage(fair_over_prob, IMPLIED_BREAKEVEN_PROB)
-
                 db.insert_bet(
                     event_id=records[0]["event_id"],
                     player_name=player_name,
                     market=f"{market_key}_over",
                     line_value=point,
-                    pinnacle_over_price=pinnacle_over,
-                    pinnacle_under_price=pinnacle_under,
+                    pinnacle_over_price=sharp_over,
+                    pinnacle_under_price=sharp_under,
                     fair_win_prob=fair_over_prob,
-                    ev_percentage=ev_pct,
+                    ev_percentage=over_ev_pct,
                     dfs_book=book_name,
                 )
                 ev_count += 1
+                sharp_source_counts[sharp_source] = sharp_source_counts.get(sharp_source, 0) + 1
 
             # Check Under - save if DFS book has this line
             if "Under" in dfs_odds:
-                ev_pct = calculate_ev_percentage(fair_under_prob, IMPLIED_BREAKEVEN_PROB)
-
                 db.insert_bet(
                     event_id=records[0]["event_id"],
                     player_name=player_name,
                     market=f"{market_key}_under",
                     line_value=point,
-                    pinnacle_over_price=pinnacle_over,
-                    pinnacle_under_price=pinnacle_under,
+                    pinnacle_over_price=sharp_over,
+                    pinnacle_under_price=sharp_under,
                     fair_win_prob=fair_under_prob,
-                    ev_percentage=ev_pct,
+                    ev_percentage=under_ev_pct,
                     dfs_book=book_name,
                 )
                 ev_count += 1
+                sharp_source_counts[sharp_source] = sharp_source_counts.get(sharp_source, 0) + 1
+
+    # Log sharp source usage
+    if sharp_source_counts["fanduel"] > 0:
+        logger.info(f"Sharp sources used: Pinnacle={sharp_source_counts['pinnacle']}, FanDuel={sharp_source_counts['fanduel']} (FanDuel EVs discounted 25%)")
 
     # Print Top 3 highest EV found (regardless of threshold)
     if all_evs:
         top_3 = sorted(all_evs, key=lambda x: x[5], reverse=True)[:3]
         logger.info("Top 3 EV (all lines):")
-        for player, market, line, selection, prob, ev in top_3:
-            logger.info(f"  {player} {market} {selection} {line}: {prob:.1%} prob, {ev:+.1f}% EV")
+        for player, market, line, selection, prob, ev, source in top_3:
+            source_note = "" if source == "pinnacle" else f" [{source}]"
+            logger.info(f"  {player} {market} {selection} {line}: {prob:.1%} prob, {ev:+.1f}% EV{source_note}")
 
     logger.info(f"Saved {ev_count} total opportunities (Top 200 will be displayed)")
     return ev_count

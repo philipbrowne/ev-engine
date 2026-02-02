@@ -925,7 +925,7 @@ class TestFindAndSaveEVOpportunities:
         count = _find_and_save_ev_opportunities(records, mock_db)
 
         assert count == 0
-        assert "Invalid Pinnacle odds" in caplog.text
+        assert "Invalid pinnacle odds" in caplog.text
 
     def test_find_ev_opportunities_missing_fields(self, caplog):
         """Test handling of records with missing fields."""

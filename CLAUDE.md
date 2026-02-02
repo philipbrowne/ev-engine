@@ -91,6 +91,16 @@ For 2-leg DFS parlays (3x payout):
 fair_prob = implied_prob / (over_implied + under_implied)
 ```
 
+### Sharp Bookmaker Hierarchy
+The engine uses Pinnacle as the primary sharp reference for de-vigging. When Pinnacle odds aren't available (e.g., NBA player props), FanDuel is used as a fallback with a 25% EV discount to account for less precise lines.
+
+```python
+SHARP_CONFIDENCE = {
+    "pinnacle": 1.0,    # Gold standard
+    "fanduel": 0.75,    # 25% EV discount
+}
+```
+
 ## Testing
 
 Tests use pytest with markers:

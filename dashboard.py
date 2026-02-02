@@ -296,18 +296,49 @@ def main():
             # Sidebar Filters
             st.sidebar.header("Filters")
 
-            books = df["Book"].unique().tolist() if "Book" in df.columns else []
-            selected_books = st.sidebar.multiselect(
-                "Select Sportsbooks",
-                options=books,
-                default=books
+            # Player search - most important filter for finding specific players
+            player_search = st.sidebar.text_input(
+                "🔍 Search Player",
+                placeholder="e.g. LeBron, Curry...",
+                help="Filter by player name (case-insensitive)"
             )
 
-            sports = df["Sport"].unique().tolist() if "Sport" in df.columns else []
-            selected_sports = st.sidebar.multiselect(
-                "Select Sports",
-                options=sports,
-                default=sports
+            # Market type filter
+            if "Market" in df.columns:
+                # Extract market types from market column (e.g., "player_points_over" -> "points")
+                def extract_market_type(market):
+                    market_lower = str(market).lower()
+                    if "points" in market_lower:
+                        return "Points"
+                    elif "assists" in market_lower:
+                        return "Assists"
+                    elif "rebound" in market_lower:
+                        return "Rebounds"
+                    elif "threes" in market_lower or "3pt" in market_lower:
+                        return "Threes"
+                    elif "steals" in market_lower:
+                        return "Steals"
+                    elif "blocks" in market_lower:
+                        return "Blocks"
+                    else:
+                        return "Other"
+
+                df["_Market_Type"] = df["Market"].apply(extract_market_type)
+                market_types = sorted(df["_Market_Type"].unique().tolist())
+                selected_markets = st.sidebar.multiselect(
+                    "Market Type",
+                    options=market_types,
+                    default=market_types,
+                    help="Filter by prop type"
+                )
+            else:
+                selected_markets = []
+
+            books = df["Book"].unique().tolist() if "Book" in df.columns else []
+            selected_books = st.sidebar.multiselect(
+                "Sportsbooks",
+                options=books,
+                default=books
             )
 
             risk_levels = ["Low Risk", "Medium Risk", "High Risk"]
@@ -317,14 +348,58 @@ def main():
                 default=risk_levels
             )
 
+            # Consolidate view toggle
+            consolidate_view = st.sidebar.checkbox(
+                "Consolidate by Player/Market",
+                value=False,
+                help="Group same player/market and show available books"
+            )
+
             # Apply filters
             filtered_df = df.copy()
+
+            # Player search filter (case-insensitive)
+            if player_search and "Player" in filtered_df.columns:
+                filtered_df = filtered_df[
+                    filtered_df["Player"].str.lower().str.contains(player_search.lower(), na=False)
+                ]
+
+            # Market type filter
+            if selected_markets and "_Market_Type" in filtered_df.columns:
+                filtered_df = filtered_df[filtered_df["_Market_Type"].isin(selected_markets)]
+
             if selected_books and "Book" in filtered_df.columns:
                 filtered_df = filtered_df[filtered_df["Book"].isin(selected_books)]
-            if selected_sports and "Sport" in filtered_df.columns:
-                filtered_df = filtered_df[filtered_df["Sport"].isin(selected_sports)]
             if selected_risks and "Risk Level" in filtered_df.columns:
                 filtered_df = filtered_df[filtered_df["Risk Level"].isin(selected_risks)]
+
+            # Sort by EV% descending (best plays first)
+            if "_EV_Numeric" in filtered_df.columns:
+                filtered_df = filtered_df.sort_values("_EV_Numeric", ascending=False)
+
+            # Consolidate view - group by player/market and show books as comma-separated
+            if consolidate_view and not filtered_df.empty:
+                # Group by Player, Market, Line and aggregate books
+                agg_dict = {
+                    "Book": lambda x: ", ".join(sorted(set(x))),
+                    "Win Prob": "first",
+                    "EV %": "first",
+                    "Risk Level": "first",
+                    "Recommendation": "first",
+                    "Freshness": "first",
+                    "Hit Rate": "first",
+                    "_EV_Numeric": "first",
+                    "_Win_Prob_Numeric": "first",
+                }
+                # Only include columns that exist
+                agg_dict = {k: v for k, v in agg_dict.items() if k in filtered_df.columns}
+
+                group_cols = [c for c in ["Player", "Market", "Line"] if c in filtered_df.columns]
+                if group_cols:
+                    filtered_df = filtered_df.groupby(group_cols, as_index=False).agg(agg_dict)
+                    # Rename Book column to show it contains multiple
+                    if "Book" in filtered_df.columns:
+                        filtered_df = filtered_df.rename(columns={"Book": "Books"})
 
             column_config = {
                 "Hit Rate": st.column_config.BarChartColumn(
@@ -345,10 +420,17 @@ def main():
                     "Fresh",
                     help="Time since last update",
                 ),
+                "Books": st.column_config.TextColumn(
+                    "Books",
+                    help="Available sportsbooks with this line",
+                    width="medium",
+                ),
             }
 
             priority_columns = ["Recommendation", "Risk Level", "Win Prob", "EV %"]
-            other_columns = ["Book", "Player", "Market", "Line", "Freshness", "Hit Rate"]
+            # Handle both "Book" (normal view) and "Books" (consolidated view)
+            book_col = "Books" if "Books" in filtered_df.columns else "Book"
+            other_columns = [book_col, "Player", "Market", "Line", "Freshness", "Hit Rate"]
 
             display_columns = []
             for col in priority_columns:
@@ -361,11 +443,20 @@ def main():
             if display_columns:
                 display_df = filtered_df[display_columns].copy()
 
+                # Show filter results summary
+                total_before_filter = len(df)
+                total_after_filter = len(display_df)
+                if player_search:
+                    st.caption(f"Showing {total_after_filter} results for '{player_search}'")
+                elif total_after_filter < total_before_filter:
+                    st.caption(f"Showing {total_after_filter} of {total_before_filter} opportunities")
+
                 st.dataframe(
                     display_df,
                     column_config=column_config,
                     hide_index=True,
-                    width="stretch",
+                    use_container_width=True,
+                    height=500,  # Fixed height with scroll
                 )
 
                 st.markdown("---")

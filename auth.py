@@ -40,7 +40,7 @@ def check_password() -> bool:
         return True
 
     # Show input for password.
-    st.markdown("### 🔐 EV Engine - Login Required")
+    st.markdown("### 🔐 EV Scout - Login Required")
     st.markdown("Please enter your password to access the dashboard.")
 
     st.text_input(

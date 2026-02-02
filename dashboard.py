@@ -175,7 +175,7 @@ def get_freshness(timestamp_str):
 
 
 def main():
-    """Main entry point for the Antigravity EV Engine Streamlit dashboard.
+    """Main entry point for the EV Scout Streamlit dashboard.
 
     Renders a comprehensive sports betting analytics dashboard with three main tabs:
     1. Live Board - Real-time betting opportunities with EV calculations
@@ -208,8 +208,8 @@ def main():
     # Master Key: Ensure all database tables exist before any operations
     db.initialize_db()
 
-    st.set_page_config(page_title="Antigravity EV Engine", layout="wide")
-    st.title("Antigravity EV Engine")
+    st.set_page_config(page_title="EV Scout", layout="wide")
+    st.title("EV Scout")
 
     # Calculate analytics from slips
     analytics = db.get_slip_analytics()

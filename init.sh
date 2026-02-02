@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # EV Engine Initialization Script
-# Simple, guided setup for the Antigravity EV Engine
+# Simple, guided setup for EV Scout
 
 set -e  # Exit on error
 
@@ -15,7 +15,7 @@ NC='\033[0m' # No Color
 # Header
 echo ""
 echo -e "${BLUE}╔═══════════════════════════════════════╗${NC}"
-echo -e "${BLUE}║   Antigravity EV Engine - Setup      ║${NC}"
+echo -e "${BLUE}║   EV Scout - Setup                   ║${NC}"
 echo -e "${BLUE}╚═══════════════════════════════════════╝${NC}"
 echo ""
 

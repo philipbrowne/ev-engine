@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 EV Engine Initialization Script (Python version)
-Cross-platform setup for the Antigravity EV Engine
+Cross-platform setup for EV Scout
 """
 
 import os
@@ -30,7 +30,7 @@ def print_header():
     """Print welcome header"""
     print()
     print(f"{Colors.BLUE}╔═══════════════════════════════════════╗{Colors.NC}")
-    print(f"{Colors.BLUE}║   Antigravity EV Engine - Setup      ║{Colors.NC}")
+    print(f"{Colors.BLUE}║   EV Scout - Setup                   ║{Colors.NC}")
     print(f"{Colors.BLUE}╚═══════════════════════════════════════╝{Colors.NC}")
     print()
 

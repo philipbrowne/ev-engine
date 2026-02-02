@@ -47,3 +47,23 @@ Thumbs.db
 *.tmp
 *.bak
 *.backup
+
+# Internal development documentation
+IMPROVEMENT_PLAN.md
+PHASE2_TEST_RESULTS.md
+TESTING.md
+TEST_INFRASTRUCTURE_SUMMARY.md
+TEST_SUMMARY.md
+TYPE_SAFETY_IMPROVEMENTS.md
+TYPE_SAFETY_QUICK_REFERENCE.md
+PROFESSIONAL_AUDIT.md
+DEPLOY_NOW.md
+
+# Development test scripts (root level)
+test_phase1.py
+test_phase2.py
+test_integration.py
+test_type_safety.py
+
+# Coverage config
+.coveragerc

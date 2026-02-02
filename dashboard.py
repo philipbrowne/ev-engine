@@ -47,33 +47,33 @@ def get_recommendation(ev):
     """Return betting recommendation based on EV percentage.
 
     Categorizes betting opportunities into three action levels for quick
-    decision-making in the dashboard.
+    decision-making in the dashboard. Includes emoji for visual scanning.
 
     Args:
         ev: Expected value percentage (e.g., 5.2 for +5.2% EV)
 
     Returns:
-        String recommendation: 'SMASH', 'FLEX', or 'AVOID'
+        String recommendation with emoji: '🟢 SMASH', '🟡 FLEX', or '🔴 AVOID'
 
     Recommendation Logic:
-        - 'SMASH': EV > 5.0% - High-value opportunity, strong bet
-        - 'FLEX': 0% < EV <= 5.0% - Positive EV, suitable for flex picks
-        - 'AVOID': EV <= 0% - Negative EV, do not bet
+        - '🟢 SMASH': EV > 5.0% - High-value opportunity, strong bet
+        - '🟡 FLEX': 0% < EV <= 5.0% - Positive EV, suitable for flex picks
+        - '🔴 AVOID': EV <= 0% - Negative EV, do not bet
 
     Examples:
         >>> get_recommendation(7.5)
-        'SMASH'
+        '🟢 SMASH'
         >>> get_recommendation(2.3)
-        'FLEX'
+        '🟡 FLEX'
         >>> get_recommendation(-1.5)
-        'AVOID'
+        '🔴 AVOID'
     """
     if ev > 5.0:
-        return "SMASH"
+        return "🟢 SMASH"
     elif ev > 0.0:
-        return "FLEX"
+        return "🟡 FLEX"
     else:
-        return "AVOID"
+        return "🔴 AVOID"
 
 
 def get_risk_level(win_prob):
@@ -451,21 +451,100 @@ def main():
                 elif total_after_filter < total_before_filter:
                     st.caption(f"Showing {total_after_filter} of {total_before_filter} opportunities")
 
-                st.dataframe(
-                    display_df,
-                    column_config=column_config,
-                    hide_index=True,
-                    use_container_width=True,
-                    height=500,  # Fixed height with scroll
-                )
+                # Add checkbox column for selecting picks (only in non-consolidated view)
+                if not consolidate_view:
+                    # Initialize selection state
+                    if "live_board_selections" not in st.session_state:
+                        st.session_state.live_board_selections = set()
+
+                    # Add Select column at the beginning
+                    display_df.insert(0, "Select", False)
+
+                    # Add _EV_Numeric for styling (hidden from display but needed for color)
+                    if "_EV_Numeric" in filtered_df.columns:
+                        display_df["_EV_Numeric"] = filtered_df["_EV_Numeric"].values
+
+                    # Column config with checkbox
+                    column_config["Select"] = st.column_config.CheckboxColumn(
+                        "➕",
+                        help="Select to add to slip",
+                        default=False,
+                        width="small",
+                    )
+
+                    # Use data_editor for interactive checkboxes
+                    edited_df = st.data_editor(
+                        display_df.drop(columns=["_EV_Numeric"], errors="ignore"),
+                        column_config=column_config,
+                        hide_index=True,
+                        use_container_width=True,
+                        height=500,
+                        key="live_board_editor",
+                    )
+
+                    # Get selected rows
+                    selected_rows = edited_df[edited_df["Select"] == True]
+
+                    # Show "Add to Slip" button if rows are selected
+                    if len(selected_rows) > 0:
+                        col1, col2, col3 = st.columns([2, 1, 1])
+                        with col1:
+                            st.success(f"✓ {len(selected_rows)} pick(s) selected")
+                        with col2:
+                            # Book selector for the slip
+                            slip_book = st.selectbox(
+                                "Book",
+                                ["PrizePicks", "Underdog", "Betr", "DK Pick6"],
+                                key="quick_add_book",
+                                label_visibility="collapsed",
+                            )
+                        with col3:
+                            if st.button("Add to Slip", type="primary", use_container_width=True):
+                                # Build legs from selected rows
+                                new_legs = []
+                                for _, row in selected_rows.iterrows():
+                                    new_legs.append({
+                                        "player": row.get("Player", ""),
+                                        "market": row.get("Market", ""),
+                                        "line": row.get("Line", 0),
+                                    })
+
+                                # Add to session state selected_legs
+                                if "selected_legs" not in st.session_state:
+                                    st.session_state.selected_legs = []
+                                st.session_state.selected_legs.extend(new_legs)
+                                st.session_state.pending_book = slip_book
+                                st.toast(f"Added {len(new_legs)} pick(s) to slip! Go to Track Bets to complete.", icon="✅")
+                                st.rerun()
+                else:
+                    # Consolidated view - use regular dataframe with styling
+                    # Apply color styling based on EV
+                    if "_EV_Numeric" in filtered_df.columns:
+                        display_df["_EV_Numeric"] = filtered_df["_EV_Numeric"].values
+                        styled_df = display_df.style.apply(style_row_by_ev, axis=1)
+                        st.dataframe(
+                            styled_df,
+                            column_config=column_config,
+                            hide_index=True,
+                            use_container_width=True,
+                            height=500,
+                        )
+                    else:
+                        st.dataframe(
+                            display_df,
+                            column_config=column_config,
+                            hide_index=True,
+                            use_container_width=True,
+                            height=500,
+                        )
 
                 st.markdown("---")
                 stat_col1, stat_col2, stat_col3 = st.columns(3)
                 with stat_col1:
                     st.metric("Total Opportunities", len(filtered_df))
                 with stat_col2:
-                    smash_count = len(filtered_df[filtered_df["Recommendation"] == "SMASH"]) if "Recommendation" in filtered_df.columns else 0
-                    st.metric("SMASH Plays", smash_count)
+                    smash_count = len(filtered_df[filtered_df["Recommendation"].str.contains("SMASH", na=False)]) if "Recommendation" in filtered_df.columns else 0
+                    st.metric("🟢 SMASH Plays", smash_count)
                 with stat_col3:
                     low_risk_count = len(filtered_df[filtered_df["Risk Level"] == "Low Risk"]) if "Risk Level" in filtered_df.columns else 0
                     st.metric("Low Risk Plays", low_risk_count)
